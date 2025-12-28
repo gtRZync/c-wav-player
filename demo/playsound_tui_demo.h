@@ -36,13 +36,13 @@ static void clear_screen() {
     SetConsoleCursorPosition(hStdOut, homeCoords);
 }
 
-void playsound_ui_demo(sound* snd) {
+void playsound_tui_demo(Sound* snd, const char* file_path) {
     setup_console();
 
     const char* states[] = { "", ".", "..", "...", "...." };
     size_t size = sizeof(states) / sizeof(states[0]);
     int idx = 0;
-    char* filename = get_filename(snd->file_path); 
+    char* filename = get_filename(file_path); 
 
     printf(HIDE_CURSOR);
 
