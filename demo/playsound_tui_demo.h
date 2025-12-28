@@ -46,7 +46,7 @@ void playsound_tui_demo(Sound* snd, const char* file_path) {
 
     printf(HIDE_CURSOR);
 
-    while (is_playing(snd)) {
+    while (sound_is_playing(snd)) {
 
         clear_screen();
 

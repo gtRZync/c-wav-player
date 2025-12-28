@@ -167,7 +167,7 @@ void play_sound(Sound *snd)
  * @note This function performs an atomic read of `dwFlags` but does not provide
  *       full synchronization for concurrent updates beyond the atomicity of the read.
  */
-bool is_playing(Sound *snd)
+bool sound_is_playing(Sound *snd)
 {
     sound_ctx_aqcuire(&snd->refcount);
     LONG result = InterlockedCompareExchange((volatile LONG*)&snd->sndFlags, 0, 0);
