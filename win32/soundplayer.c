@@ -35,19 +35,20 @@
 //TODO: add guards against invalid pointers usage 
 //!Maybe add an InitSoundSystem that init a global lock and also keep tracks of every sound created to have better and safer access to ptr check
 //* date: 25/10/2025, not so sure about the idea prior to this comment no more, but ion wanna remove it completely just yet 
+//* date: 28/12/2025, going back to that init_sound_system idea but instead of global lock imma go for an AudioThread for all sounds not sure bout impl yet but ig it's that
 
 static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR param1, DWORD_PTR param2);
-static void sound_cleanup_on_fail(sound* snd);
-static void sound_ctx_aqcuire(state internal);
-static void sound_ctx_release(state internal);
-static void sound_load(sound *snd);
+static void sound_cleanup_on_fail(Sound* snd);
+static void sound_ctx_aqcuire(LONG volatile* refcount);
+static void sound_ctx_release(LONG volatile* refcount);
+static void sound_load(Sound *snd);
 static bool WaveOutOpFailed(MMRESULT mmResult, const char* fn_name);
-static void WAVEFORMATEX_HDRinit(const sound* snd);
-static void prepareSoundData(sound* snd);
-static void unprepareSoundData(sound* snd);
-static void unprepareSoundDataInCleanup(sound* snd);
+static void WAVEFORMATEX_HDRinit(const Sound* snd);
+static void prepareSoundData(Sound* snd);
+static void unprepareSoundData(Sound* snd);
+static void unprepareSoundDataInCleanup(Sound* snd);
 
-struct state__ {
+struct Sound {
     wav_file_t wav_file;
     WAVEFORMATEX format;
     HWAVEOUT hWaveOut;
@@ -56,73 +57,63 @@ struct state__ {
     CRITICAL_SECTION lock;
     volatile LONG refcount;
     HANDLE hBufferDoneEvent; /*rename to hAllBufferDoneEvent for dbl buffering clarity*/
+    char* file_path;
 };
 
 typedef enum Flags {
-    SOUND_IS_INITIALIZED    = 0x00000001,
-    SOUND_PLAYBACK_DONE     = 0x00000002,
-    SOUND_IS_PLAYING        = 0x00000004,
-    SOUND_WAV_PARSED        = 0x00000008,
-    SOUND_LOOPING           = 0x0000000E, //?Even though 0xE is technically a combination of multiple bits, it represents one valid state (since a sound's is_done and playing flags are mutually exclusive )
+    SOUND_INITIALIZED   = 0x00000001,
+    SOUND_PLAYBACK_DONE = 0x00000002,
+    SOUND_PLAYING       = 0x00000004,
+    SOUND_WAV_PARSED    = 0x00000008,
+    SOUND_LOOPING       = 0x0000000E, //?Even though 0xE is technically a combination of multiple bits, it represents one valid state (since a sound's is_done and playing flags are mutually exclusive )
 }Flags;
 
 //=================================================PUBLIC API IMPLEMENTATION==========================================================
 
-sound *sound_init(const char* file_path) {
-    state s = (state)malloc(sizeof(struct state__));
-    if(!s) {
-        Log(LOG_ERROR, "malloc failed to allocate memory for sound state\n");
-        exit(EXIT_FAILURE);
-    }
-    memset(s, 0, sizeof(struct state__));
-    sound *snd = (sound*)malloc(sizeof(sound));
+Sound *sound_init(const char* file_path) {
+    Sound* snd = (Sound*)malloc(sizeof(struct Sound));
     if(!snd) {
         Log(LOG_ERROR, "malloc failed to allocate memory for sound struct\n");
-        free(s);
         exit(EXIT_FAILURE);
     }
+    memset(snd, 0, sizeof(struct Sound));
     snd->file_path = NULL;
     size_t len = strlen(file_path);
     snd->file_path = (char*)malloc(len + 1);
     if(!snd->file_path) {
         Log(LOG_ERROR, "malloc failed to allocate memory for file_path\n");
-        free(s);
+        //!maybe add cause ?from strerror, perror??
         free(snd);
         exit(EXIT_FAILURE);
     }
     strcpy(snd->file_path, file_path);
-    snd->state = s;
     sound_load(snd);
     return snd;
 }
 
-void sound_unload(sound *snd)
+void sound_release(Sound *snd)
 {
     if (!snd) return; //!unsafe
-    if(!snd->state && !snd->file_path) {
+    if(!snd->file_path) {
         Log(LOG_WARNING, "Only Sound's struct was freed - Sound's state wasn't initialized.\n\n");
         free(snd);
         return;
     }
-    EnterCriticalSection(&snd->state->lock);
-    if (snd->state) {
-        unprepareSoundDataInCleanup(snd);
-        wav_free_file(&snd->state->wav_file);
-        LeaveCriticalSection(&snd->state->lock);
-        DeleteCriticalSection(&snd->state->lock);
-        LONG refCount = InterlockedCompareExchange((volatile LONG*)&snd->state->refcount, 0, 0);
-        if(refCount == 0) { 
-            free(snd->state);
-            snd->state = NULL;
-            if (snd->file_path) {
-                free(snd->file_path);
-                snd->file_path = NULL; 
-                Log(LOG_INFO, "Sound's file_path successfully freed!\n\n");
-            }
-            free(snd);
+    EnterCriticalSection(&snd->lock);
+    unprepareSoundDataInCleanup(snd);
+    wav_free_file(&snd->wav_file);
+    LeaveCriticalSection(&snd->lock);
+    DeleteCriticalSection(&snd->lock);
+    LONG refCount = InterlockedCompareExchange((volatile LONG*)&snd->refcount, 0, 0);
+    if(refCount == 0) { 
+        if (snd->file_path) {
+            free(snd->file_path);
+            snd->file_path = NULL; 
+            Log(LOG_INFO, "Sound's file_path successfully freed!\n\n");
         }
-        Log(LOG_INFO, "Sound's state successfully unloaded!\n\n");
+        free(snd);
     }
+    Log(LOG_INFO, "Sound's state successfully unloaded!\n\n");
 }
 
 /**
@@ -131,35 +122,36 @@ void sound_unload(sound *snd)
  * @param snd Initialized sound struct.
  *! @warning Not thread-safe: `play_sound()` and `WaveOutProc` access state flags concurrently without synchronization, which may cause data races and undefined behavior.
  */
-void play_sound(sound *snd)
+void play_sound(Sound *snd)
 {
     //TODO: yeah no vro pack it up and give every sound a critical section lock ✌🏻😭
     //TODO: maybe use double Buffering for replays
-    if(!snd || !snd->state) return; //!unsafe access
+    //TODO: find a way to use an AudioThread
+    if(!snd) return; //!unsafe access
 
     //!Enter Critical section , incr refcount, do things..,ResetEvent, decr ref, leave critical Section
-    EnterCriticalSection(&snd->state->lock);
-    sound_ctx_aqcuire(snd->state);
-    if(!(snd->state->sndFlags & SOUND_IS_PLAYING)) {
-        if((snd->state->sndFlags & SOUND_PLAYBACK_DONE) && (snd->state->waveHeader.dwFlags & WHDR_DONE)) {
-            snd->state->sndFlags &= ~SOUND_PLAYBACK_DONE;
+    EnterCriticalSection(&snd->lock);
+    sound_ctx_aqcuire(&snd->refcount);
+    if(!(snd->sndFlags & SOUND_PLAYING)) {
+        if((snd->sndFlags & SOUND_PLAYBACK_DONE) && (snd->waveHeader.dwFlags & WHDR_DONE)) {
+            snd->sndFlags &= ~SOUND_PLAYBACK_DONE;
         }
-        MMRESULT mmres = waveOutWrite(snd->state->hWaveOut, &snd->state->waveHeader, sizeof(WAVEHDR));
+        MMRESULT mmres = waveOutWrite(snd->hWaveOut, &snd->waveHeader, sizeof(WAVEHDR));
         if(WaveOutOpFailed(mmres, "waveOutWrite")) {
             unprepareSoundData(snd);
             prepareSoundData(snd);
-            mmres = waveOutWrite(snd->state->hWaveOut, &snd->state->waveHeader, sizeof(WAVEHDR));
+            mmres = waveOutWrite(snd->hWaveOut, &snd->waveHeader, sizeof(WAVEHDR));
             if(WaveOutOpFailed(mmres, "waveOutWrite")) {
                 unprepareSoundData(snd);
                 Log(LOG_ERROR, "waveOutWrite failed after recovery attempt. Audio output unavailable. Aborting playback.\n");
                 return;
             }
         }
-        snd->state->sndFlags |= SOUND_IS_PLAYING;
-        ResetEvent(snd->state->hBufferDoneEvent);
+        snd->sndFlags |= SOUND_PLAYING;
+        ResetEvent(snd->hBufferDoneEvent);
     }
-    sound_ctx_release(snd->state);
-    LeaveCriticalSection(&snd->state->lock);
+    sound_ctx_release(&snd->refcount);
+    LeaveCriticalSection(&snd->lock);
 }
 
 /**
@@ -175,37 +167,38 @@ void play_sound(sound *snd)
  * @note This function performs an atomic read of `dwFlags` but does not provide
  *       full synchronization for concurrent updates beyond the atomicity of the read.
  */
-bool is_playing(sound *snd)
+bool is_playing(Sound *snd)
 {
-    sound_ctx_aqcuire(snd->state);
-    LONG result = InterlockedCompareExchange((volatile LONG*)&snd->state->sndFlags, 0, 0);
-    sound_ctx_release(snd->state);
-    return (result & SOUND_IS_PLAYING) != 0;
+    sound_ctx_aqcuire(&snd->refcount);
+    LONG result = InterlockedCompareExchange((volatile LONG*)&snd->sndFlags, 0, 0);
+    sound_ctx_release(&snd->refcount);
+    return (result & SOUND_PLAYING) != 0;
 }
 
 //=================================================PRIVATE UTILITY IMPLEMENTATION==========================================================
 
-static void sound_ctx_aqcuire(state internal) {
-    InterlockedIncrement(&internal->refcount);
+static void sound_ctx_aqcuire(LONG volatile* refcount) {
+    InterlockedIncrement(refcount);
 }
 
-static void sound_ctx_release(state internal) {
-    InterlockedDecrement(&internal->refcount);
+static void sound_ctx_release(LONG volatile* refcount) {
+    InterlockedDecrement(refcount);
 }
 
-static void sound_load(sound *snd)
+static void sound_load(Sound *snd)
 {  
-    //!could cause race cond if called after play_sound(...)
+
     if(!snd) return;
-    if(snd->state->sndFlags & SOUND_WAV_PARSED) return; //!maybe log
-    wav_init_file(&snd->state->wav_file);
-    if(!wav_parse_file(snd->file_path, &snd->state->wav_file)) {
+    if(snd->sndFlags & SOUND_WAV_PARSED) return; //!maybe log
+
+    wav_init_file(&snd->wav_file);
+    if(!wav_parse_file(snd->file_path, &snd->wav_file)) {
         sound_cleanup_on_fail(snd);
         exit(EXIT_FAILURE);
     }
-    snd->state->sndFlags |= SOUND_WAV_PARSED;
-    snd->state->hBufferDoneEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    InitializeCriticalSection(&snd->state->lock);
+    snd->sndFlags |= SOUND_WAV_PARSED;
+    snd->hBufferDoneEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    InitializeCriticalSection(&snd->lock);
     WAVEFORMATEX_HDRinit(snd);
     prepareSoundData(snd);
 }
@@ -221,10 +214,10 @@ static bool WaveOutOpFailed(MMRESULT mmResult, const char* fn_name) {
     return false;
 }
 
-static void WAVEFORMATEX_HDRinit(const sound* snd) {
-    wav_file_t* wav_file = &snd->state->wav_file;
-    WAVEFORMATEX* format = &snd->state->format;
-    WAVEHDR *wvHeader = &snd->state->waveHeader;
+static void WAVEFORMATEX_HDRinit(const Sound* snd) {
+    const wav_file_t* wav_file = &snd->wav_file;
+    WAVEFORMATEX* format = &snd->format;
+    WAVEHDR *wvHeader = &snd->waveHeader;
     //---------------Format Section-------------------
     format->wFormatTag = WAVE_FORMAT_PCM;
     format->nChannels = wav_file->header.num_channels;
@@ -234,69 +227,65 @@ static void WAVEFORMATEX_HDRinit(const sound* snd) {
     format->wBitsPerSample = wav_file->header.bits_per_sample;
     format->cbSize = 0; 
     //---------------Header Section-------------------
-    wvHeader->lpData = snd->state->wav_file.data;
-    wvHeader->dwBufferLength = snd->state->wav_file.data_length; 
+    wvHeader->lpData = snd->wav_file.data;
+    wvHeader->dwBufferLength = snd->wav_file.data_length; 
 }
 //!potentially unsafe usage lock before use 
-static void prepareSoundData(sound* snd) {
-    MMRESULT mmres = waveOutOpen(&snd->state->hWaveOut, WAVE_MAPPER, &snd->state->format, (DWORD_PTR)waveOutProc, (DWORD_PTR)snd, CALLBACK_FUNCTION);
+static void prepareSoundData(Sound* snd) {
+    MMRESULT mmres = waveOutOpen(&snd->hWaveOut, WAVE_MAPPER, &snd->format, (DWORD_PTR)waveOutProc, (DWORD_PTR)snd, CALLBACK_FUNCTION);
     if(WaveOutOpFailed(mmres, "waveOutOpen")) {
         sound_cleanup_on_fail(snd);
         exit(EXIT_FAILURE);//! maybe not, will quit even if i was loading several sound and only one of em failed
     }
-    mmres = waveOutPrepareHeader(snd->state->hWaveOut, &snd->state->waveHeader, sizeof(WAVEHDR));
+    mmres = waveOutPrepareHeader(snd->hWaveOut, &snd->waveHeader, sizeof(WAVEHDR));
     if(WaveOutOpFailed(mmres, "waveOutPrepareHeader")) {
-        waveOutClose(snd->state->hWaveOut);
+        waveOutClose(snd->hWaveOut);
         sound_cleanup_on_fail(snd);
         exit(EXIT_FAILURE);//! maybe not, will quit even if i was loading several sound and only one of em failed
     }
 }
 //!potentially unsafe usage lock before use, also redudant code, just add a boolean flag wether to WaitForSingleObject or not
-static void unprepareSoundData(sound* snd) {
-    MMRESULT mmres = waveOutReset(snd->state->hWaveOut);
+static void unprepareSoundData(Sound* snd) {
+    MMRESULT mmres = waveOutReset(snd->hWaveOut);
     if(WaveOutOpFailed(mmres, "waveOutUnprepareHeader")) {
         //? Continue anyway, maybe device already stopped/invalid
     }
-    mmres = waveOutUnprepareHeader(snd->state->hWaveOut, &snd->state->waveHeader, sizeof(WAVEHDR));
+    mmres = waveOutUnprepareHeader(snd->hWaveOut, &snd->waveHeader, sizeof(WAVEHDR));
     if(WaveOutOpFailed(mmres, "waveOutUnprepareHeader")) {
         //? Can't free buffer safely; proceed to close device
     }
-    mmres = waveOutClose(snd->state->hWaveOut);
+    mmres = waveOutClose(snd->hWaveOut);
     if(WaveOutOpFailed(mmres, "waveOutClose")) {
         //? Nothing else to do — OS will reclaim resources on process exit
     }
 }
 //!this might be unsafe twan, whatchu saying ?
-static void unprepareSoundDataInCleanup(sound* snd) {
-    MMRESULT mmres = waveOutReset(snd->state->hWaveOut);
+static void unprepareSoundDataInCleanup(Sound* snd) {
+    MMRESULT mmres = waveOutReset(snd->hWaveOut);
     if(WaveOutOpFailed(mmres, "waveOutUnprepareHeader")) {
         //? Continue anyway, maybe device already stopped/invalid
     }
     //!wait for the callback_func to receive WOM_DONE
-    WaitForSingleObject(snd->state->hBufferDoneEvent, INFINITE);
+    WaitForSingleObject(snd->hBufferDoneEvent, INFINITE);
 
-    mmres = waveOutUnprepareHeader(snd->state->hWaveOut, &snd->state->waveHeader, sizeof(WAVEHDR));
+    mmres = waveOutUnprepareHeader(snd->hWaveOut, &snd->waveHeader, sizeof(WAVEHDR));
     if(WaveOutOpFailed(mmres, "waveOutUnprepareHeader")) {
         //? Can't free buffer safely; proceed to close device
     }
-    mmres = waveOutClose(snd->state->hWaveOut);
+    mmres = waveOutClose(snd->hWaveOut);
     if(WaveOutOpFailed(mmres, "waveOutClose")) {
         //? Nothing else to do — OS will reclaim resources on process exit
     }
 }
 
 
-static void sound_cleanup_on_fail(sound* snd) {
+static void sound_cleanup_on_fail(Sound* snd) {
     if (!snd) return;
-    if(!snd->state && !snd->file_path) {
+
+    if(!snd->file_path) {
         Log(LOG_WARNING, "Only Sound's struct was freed - Sound's state wasn't initialized.\n\n");
         free(snd);
         return;
-    }
-    if (snd->state) {
-        free(snd->state);
-        snd->state = NULL;
-        Log(LOG_INFO, "Sound's state successfully unloaded!\n\n");
     }
     if (snd->file_path) {
         free(snd->file_path);
@@ -314,14 +303,14 @@ static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, 
     switch(uMsg) {
         case WOM_DONE:
         {
-            sound* snd = (sound*)dwInstance;
+            Sound* snd = (Sound*)dwInstance;
 
             if(snd) {
-                sound_ctx_aqcuire(snd->state);
-                InterlockedAnd((volatile LONG*)&snd->state->sndFlags, ~SOUND_IS_PLAYING);
-                InterlockedOr((volatile LONG*)&snd->state->sndFlags, SOUND_PLAYBACK_DONE);
-                SetEvent(snd->state->hBufferDoneEvent);//! may be unsafe to access, consider using locks
-                sound_ctx_release(snd->state);
+                sound_ctx_aqcuire(&snd->refcount);
+                InterlockedAnd((volatile LONG*)&snd->sndFlags, ~SOUND_PLAYING);
+                InterlockedOr((volatile LONG*)&snd->sndFlags, SOUND_PLAYBACK_DONE);
+                SetEvent(snd->hBufferDoneEvent);
+                sound_ctx_release(&snd->refcount);
             }
         }
     }

@@ -17,14 +17,9 @@
 #pragma once
 #include <stdbool.h>
 
-typedef struct state__ *state;
+typedef struct Sound Sound;
 
-typedef struct sound {
-    char* file_path;
-    state state;
-} sound;
-
-sound *sound_init(const char* file_path);
-void  sound_unload(sound* _sound);
-void  play_sound(sound* _sound);
-bool  is_playing(sound* snd);
+Sound *sound_init(const char* file_path);
+void  sound_release(Sound* _sound);
+void  play_sound(Sound* _sound);
+bool  is_playing(Sound* snd);
