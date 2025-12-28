@@ -21,9 +21,13 @@ int main(int argc, char const *argv[])
 {
     wav_file_t file;
     wav_init_file(&file);
-    if(wav_parse_file("resources/sound/FlappyBird_Menu.wav", &file)) {
-        wav_print_header(&file.header);
+
+    if(!wav_parse_file("resources/sound/FlappyBird_Menu.wav", &file)) {
+        return 1; //better err code comming soon
     }
+
+    //use wav file data...
+
     wav_free_file(&file);
     return 0;
 }
@@ -32,19 +36,17 @@ int main(int argc, char const *argv[])
 ### Win32 Soundplayer(using the wav parser)
 ```c
 #include "win32/soundplayer.h"
-#include "playsound_ui_demo.h"
 
 int main(int argc, char const *argv[])
 {
-    sound* snd = sound_init("resources/sound/bass-wiggle.wav");
-    play_sound(&snd);
+    Sound* snd = sound_init("resources/sound/bass-wiggle.wav");
+    play_sound(snd);
 
-    // Keep the main thread alive while the sound is playing.
-    // This uses a simple UI demo that internally checks is_playing(snd).
-    // Alternatively, a sleep loop or similar wait could be used instead.
-    playsound_ui_demo(&snd);
+    while(sound_is_playing(snd)) {
+        draw_ui();
+    }
 
-    sound_unload(&snd);
+    sound_release(snd);
     return 0;
 }
 ```
