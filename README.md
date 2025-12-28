@@ -26,7 +26,7 @@ int main(int argc, char const *argv[])
         return 1; //better err code comming soon
     }
 
-    //use wav file data...
+    //using wav file data...
 
     wav_free_file(&file);
     return 0;
@@ -51,28 +51,11 @@ int main(int argc, char const *argv[])
 }
 ```
 
-## Example Output
+## WAV parser (header data display)
 
-### WAV parser (header data display)
-
-|          Success Output                               |
+|          WAV header data                              |
 |-------------------------------------------------------|
-| ![Demo](resources/images/demo.png)                           |
-
-|          Error Output                                 |
-|-------------------------------------------------------|
-| ![Error](resources/images/not_a_wav_err.png)                 |
-
-### Win32 Soundplayer(using the wav parser)
-
-|          Player Demo : Playing                        |
-|-------------------------------------------------------|
-| ![Demo](resources/images/player_demo.gif)                    |
-
-|          Player Demo : End                            |
-|-------------------------------------------------------|
-| ![Demo](resources/images/player_demo_end.png)                    |
-
+| ![Demo](resources/images/demo.png)                    |
 
 ## License
 
