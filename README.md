@@ -1,7 +1,7 @@
 >[!IMPORTANT]
-Development paused due to school. Planned improvements:  
-- Refactor code structure for clarity and maintainability  
-- Make playback thread-safe for asynchronous audio handling  
+>Development paused due to school. Planned improvements:  
+>- Refactor code structure for clarity and maintainability  
+>- Make playback thread-safe for asynchronous audio handling  
 
 # c-wav-player: Custom WAV File Parser & Win32 Audio Player in C
 
