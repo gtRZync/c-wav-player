@@ -14,8 +14,10 @@
  * -------------------------------------------------------------
  */
 
-#include "path_utils.h"
 #include <stdbool.h>
+#include <string.h>
+#include <stdlib.h>
+#include "path_utils.h"
 
 static char* clean_path(const char* path) {
     if (!path) return NULL;

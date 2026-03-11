@@ -18,6 +18,9 @@
 #include "log.h"
 #include "path_utils.h"
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h> 
+#include <string.h> 
 
 void wav_print_header(const wav_header_t* header) {
     printf(COLOR_CYAN "----- WAV Header Info -----\n" COLOR_RESET);

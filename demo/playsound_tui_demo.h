@@ -2,6 +2,7 @@
 #include "wav_parser.h"
 #include "log.h"
 #include "path_utils.h"
+#include <stdio.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #define HIDE_CURSOR     "\033[?25l"

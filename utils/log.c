@@ -13,6 +13,8 @@
  *  See README.md for usage and LICENSE for distribution terms.
  * -------------------------------------------------------------
  */
+#include <stdio.h>
+#include <stdarg.h>
 #include "log.h"
 
 void Log(LogType type, const char* format, ...) {

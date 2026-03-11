@@ -15,8 +15,6 @@
  */
 
 #pragma once
-#include <stdio.h>
-#include <stdarg.h>
 
 #define COLOR_RED       "\033[1;31m"
 #define COLOR_GREEN     "\033[1;32m"
